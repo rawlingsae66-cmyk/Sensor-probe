@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phone sensor probe</title>
+<style>
+body{font:16px/1.4 system-ui,sans-serif;margin:0;padding:14px;background:#111;color:#eee}
+h1{font-size:1.2em;margin:0 0 4px} h2{font-size:1em;margin:18px 0 6px;color:#8cf}
+button{font-size:1em;padding:12px 16px;margin:4px 4px 4px 0;border:0;border-radius:8px;background:#2a6;color:#fff}
+button.alt{background:#456}
+table{width:100%;border-collapse:collapse} td{padding:5px 3px;border-bottom:1px solid #333;vertical-align:top}
+td:last-child{text-align:right;font-family:monospace}
+.ok{color:#6e6}.no{color:#e66}.na{color:#999}
+.big{font:700 2.2em monospace;text-align:center;padding:6px}
+.small{font-size:.85em;color:#999}
+video{width:100%;border-radius:8px;background:#000;display:none}
+</style></head><body>
+<h1>Phone sensor probe</h1>
+<div class="small" id="env"></div>
+
+<h2>1. Tap to start (browsers need a tap)</h2>
+<button id="start">Start sensors</button>
+<button class="alt" id="gps">Get location</button>
+<button class="alt" id="cam">Test camera</button>
+
+<h2>2. What this phone exposes</h2>
+<table id="support"></table>
+
+<h2>3. Live readings</h2>
+<table id="live"></table>
+
+<h2>4. Tilt angles (the awning tool)</h2>
+<div class="small">Long-edge angle: hold the phone's long edge along the awning rail or slope.<br>
+Camera elevation: sight along the back camera at a target; angle above/below level.</div>
+<div class="big" id="edge">--</div>
+<div class="small" style="text-align:center">long edge from horizontal</div>
+<div class="big" id="elev">--</div>
+<div class="small" style="text-align:center">camera elevation</div>
+<div id="held" class="small"></div>
+<button id="hold">Hold this reading</button>
+<button class="alt" id="clear">Clear held</button>
+<video id="vid" playsinline muted></video>
+<script>
+const $=id=>document.getElementById(id);
+const fmt=v=>v==null?'--':(typeof v==='number'?v.toFixed(2):String(v));
+$('env').textContent=`Secure context: ${window.isSecureContext} | ${location.protocol}//${location.host} | ${navigator.userAgent.slice(0,90)}`;
+
+const supportRows=[
+ ['DeviceOrientationEvent','DeviceOrientationEvent' in window],
+ ['DeviceMotionEvent','DeviceMotionEvent' in window],
+ ['Accelerometer (Generic Sensor)','Accelerometer' in window],
+ ['Gyroscope (Generic Sensor)','Gyroscope' in window],
+ ['Magnetometer (Generic Sensor)','Magnetometer' in window],
+ ['AbsoluteOrientationSensor','AbsoluteOrientationSensor' in window],
+ ['AmbientLightSensor','AmbientLightSensor' in window],
+ ['Geolocation','geolocation' in navigator],
+ ['Camera API','mediaDevices' in navigator && !!navigator.mediaDevices.getUserMedia],
+ ['Vibration','vibrate' in navigator],
+];
+$('support').innerHTML=supportRows.map(([n,v])=>`<tr><td>${n}</td><td class="${v?'ok':'no'}">${v?'yes':'no'}</td></tr>`).join('');
+
+const state={ax:null,ay:null,az:null,gx:null,gy:null,gz:null,mx:null,my:null,mz:null,lux:null,
+ alpha:null,beta:null,gamma:null,lat:null,lon:null,acc:null,rate:null,note:''};
+let held=[];
+let lastT=0,n=0;
+
+function track(){const t=performance.now();n++;if(t-lastT>1000){state.rate=n*1000/(t-lastT);n=0;lastT=t;}}
+
+function tryStart(name,make,onread){
+  try{
+    const s=make();
+    s.addEventListener('reading',()=>{onread(s);track();render();});
+    s.addEventListener('error',e=>{state.note+=`${name}: ${e.error.name}\n`;render();});
+    s.start();
+  }catch(e){state.note+=`${name}: ${e.name||e}\n`;}
+}
+
+$('start').onclick=async()=>{
+  state.note='';
+  if(typeof DeviceMotionEvent!=='undefined'&&typeof DeviceMotionEvent.requestPermission==='function'){
+    try{await DeviceMotionEvent.requestPermission();}catch(e){}
+  }
+  if('Accelerometer' in window) tryStart('Accelerometer',()=>new Accelerometer({frequency:30,referenceFrame:'device'}),s=>{state.ax=s.x;state.ay=s.y;state.az=s.z;});
+  else window.addEventListener('devicemotion',e=>{const a=e.accelerationIncludingGravity;if(a){state.ax=a.x;state.ay=a.y;state.az=a.z;track();render();}});
+  if('Gyroscope' in window) tryStart('Gyroscope',()=>new Gyroscope({frequency:30}),s=>{state.gx=s.x;state.gy=s.y;state.gz=s.z;});
+  if('Magnetometer' in window) tryStart('Magnetometer',()=>new Magnetometer({frequency:10}),s=>{state.mx=s.x;state.my=s.y;state.mz=s.z;});
+  if('AmbientLightSensor' in window) tryStart('AmbientLight',()=>new AmbientLightSensor({frequency:5}),s=>{state.lux=s.illuminance;});
+  window.addEventListener('deviceorientation',e=>{state.alpha=e.alpha;state.beta=e.beta;state.gamma=e.gamma;render();});
+  render();
+};
+
+$('gps').onclick=()=>{
+  if(!navigator.geolocation){state.note+='No geolocation\n';return render();}
+  navigator.geolocation.getCurrentPosition(p=>{state.lat=p.coords.latitude;state.lon=p.coords.longitude;state.acc=p.coords.accuracy;render();},
+    e=>{state.note+=`Location: ${e.message}\n`;render();},{enableHighAccuracy:true,timeout:15000});
+};
+
+$('cam').onclick=async()=>{
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    const v=$('vid');v.srcObject=s;v.style.display='block';await v.play();
+    const t=s.getVideoTracks()[0],st=t.getSettings();
+    state.note+=`Camera: ${st.width}x${st.height} @${st.frameRate||'?'}fps\n`;
+  }catch(e){state.note+=`Camera: ${e.name}\n`;}
+  render();
+};
+
+function angles(){
+  const {ax,ay,az}=state;if(ax==null)return {};
+  const g=Math.hypot(ax,ay,az)||1,d=180/Math.PI;
+  return {edge:Math.asin(Math.max(-1,Math.min(1,ay/g)))*d, elev:-Math.asin(Math.max(-1,Math.min(1,az/g)))*d, g};
+}
+
+$('hold').onclick=()=>{const a=angles();if(a.edge!=null){held.push(a);render();}};
+$('clear').onclick=()=>{held=[];render();};
+
+function render(){
+  const a=angles();
+  $('edge').textContent=a.edge==null?'--':a.edge.toFixed(1)+'°';
+  $('elev').textContent=a.elev==null?'--':a.elev.toFixed(1)+'°';
+  $('held').innerHTML=held.map((h,i)=>`#${i+1}: edge ${h.edge.toFixed(1)}°, elevation ${h.elev.toFixed(1)}°`).join('<br>');
+  const rows=[
+   ['Accel x,y,z (m/s²)',[state.ax,state.ay,state.az]],
+   ['|g| (should be ~9.8)',[a.g]],
+   ['Gyro x,y,z (rad/s)',[state.gx,state.gy,state.gz]],
+   ['Magnetometer x,y,z (µT)',[state.mx,state.my,state.mz]],
+   ['Orientation a,b,g (°)',[state.alpha,state.beta,state.gamma]],
+   ['Light (lux)',[state.lux]],
+   ['Lat, lon, accuracy (m)',[state.lat,state.lon,state.acc]],
+   ['Update rate (Hz)',[state.rate]],
+  ];
+  $('live').innerHTML=rows.map(([n,v])=>`<tr><td>${n}</td><td>${v.map(fmt).join(', ')}</td></tr>`).join('')+
+    (state.note?`<tr><td colspan=2 class="small" style="white-space:pre-wrap;text-align:left">${state.note}</td></tr>`:'');
+}
+render();
+</script></body></html>
