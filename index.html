@@ -21,6 +21,8 @@ video{width:100%;border-radius:8px;background:#000;display:none}
 <button id="start">Start sensors</button>
 <button class="alt" id="gps">Get location</button>
 <button class="alt" id="cam">Test camera</button>
+<select id="res" style="font-size:1em;padding:12px;border-radius:8px;background:#456;color:#fff;border:0">
+<option value="480">480p</option><option value="720">720p</option><option value="1080" selected>1080p</option><option value="2160">4K</option><option value="max">Max</option></select>
 
 <h2>2. What this phone exposes</h2>
 <table id="support"></table>
@@ -96,10 +98,16 @@ $('gps').onclick=()=>{
 
 $('cam').onclick=async()=>{
   try{
-    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-    const v=$('vid');v.srcObject=s;v.style.display='block';await v.play();
+    const v=$('vid');
+    if(v.srcObject)v.srcObject.getTracks().forEach(t=>t.stop());
+    const r=$('res').value,h=r==='max'?4320:+r,w=Math.round(h*16/9);
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},
+      width:{ideal:w},height:{ideal:h}}});
+    v.srcObject=s;v.style.display='block';await v.play();
     const t=s.getVideoTracks()[0],st=t.getSettings();
-    state.note+=`Camera: ${st.width}x${st.height} @${st.frameRate||'?'}fps\n`;
+    let cap='';
+    try{const c=t.getCapabilities();cap=` (camera max ${c.width&&c.width.max}x${c.height&&c.height.max})`;}catch(e){}
+    state.note+=`Camera asked ${r==='max'?'max':r+'p'}: got ${st.width}x${st.height} @${st.frameRate||'?'}fps${cap}\n`;
   }catch(e){state.note+=`Camera: ${e.name}\n`;}
   render();
 };
